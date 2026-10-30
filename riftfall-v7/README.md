@@ -14,3 +14,6 @@ WASD/šipky: pohyb; E: schopnost; mezerník: úskok; Esc: pauza/menu. Automatick
 Postup a achievementy se ukládají lokálně v prohlížeči; JSON export/import umožňuje přenos. Starší uložené hry jsou podporované. Vymazání dat webu odstraní místní postup.
 
 Ověření: regresní a herní testy, prostorové kolize, ukládání, náhledy upgradů, zachování XP a nativní OpenGL ES test shaderů. Syntetický CPU benchmark sestavení zaplněné scény byl přibližně 39× rychlejší; nejde o měření FPS na uživatelově zařízení.
+
+## VII.1 — oprava navigace na mostě
+Přímé pronásledování ve volném prostoru, bezpečné diagonální cesty, navigace podle velikosti monster, prostorové rozestupy všech sousedů a různé odstupy střelců (6–10 m) místo jednotné řady. Původní uložené hry jsou podporované. Ověřeno simulací tras běžných i velkých nepřátel na všech třech mapách a regresními testy.

@@ -6,17 +6,62 @@ let seed=83;function rng(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return 
 let obstacleCells=new Map(),enemyCells=new Map(),lastFlowCell=-1,synergyCache=null;
 let stage=1,landmarkCache=null;
 let mapIndex=0,activeMap=RF.maps[0],obstacles=[],world;
-function chooseMap(i){landmarkCache=null;mapIndex=i;const result=RF.buildMap(i,stage);activeMap=result.cfg;obstacles=result.obstacles;world=result.world;indexObstacles();lastFlowCell=-1;for(let z=0;z<N;z++)for(let x=0;x<N;x++)walk[z*N+x]=blocked(x-HALF+.5,z-HALF+.5,.7)?0:1;}
+function chooseMap(i){navLayers.clear();landmarkCache=null;mapIndex=i;const result=RF.buildMap(i,stage);activeMap=result.cfg;obstacles=result.obstacles;world=result.world;indexObstacles();lastFlowCell=-1;for(let z=0;z<N;z++)for(let x=0;x<N;x++)walk[z*N+x]=blocked(x-HALF+.5,z-HALF+.5,.7)?0:1;}
 function indexObstacles(){obstacleCells.clear();for(const o of obstacles){for(let x=Math.floor((o.x-o.w/2-1.6+HALF)/4);x<=Math.floor((o.x+o.w/2+1.6+HALF)/4);x++)for(let z=Math.floor((o.z-o.d/2-1.6+HALF)/4);z<=Math.floor((o.z+o.d/2+1.6+HALF)/4);z++){const key=x+','+z;let list=obstacleCells.get(key);if(!list){list=[];obstacleCells.set(key,list)}list.push(o)}}}
 function blocked(x,z,r=.4){if(Math.abs(x)>HALF-.5-r||Math.abs(z)>HALF-.5-r)return true;const list=r>1.6?obstacles:obstacleCells.get(Math.floor((x+HALF)/4)+','+Math.floor((z+HALF)/4))||[];for(const o of list)if(Math.abs(x-o.x)<o.w/2+r&&Math.abs(z-o.z)<o.d/2+r)return true;return false}
 function indexEnemies(){enemyCells.clear();for(const e of enemies)if(e.hp>0){const key=Math.floor(e.x/4)+','+Math.floor(e.z/4);let list=enemyCells.get(key);if(!list){list=[];enemyCells.set(key,list)}list.push(e)}}
 function nearbyEnemies(x,z,r){const out=[];for(let a=Math.floor((x-r)/4);a<=Math.floor((x+r)/4);a++)for(let b=Math.floor((z-r)/4);b<=Math.floor((z+r)/4);b++){const list=enemyCells.get(a+','+b);if(list)for(const e of list)if(e.hp>0)out.push(e)}return out}
 function move(e,dx,dz){const n=Math.max(1,Math.ceil(Math.max(Math.abs(dx),Math.abs(dz))/.18));for(let i=0;i<n;i++){if(!blocked(e.x+dx/n,e.z,e.r))e.x+=dx/n;if(!blocked(e.x,e.z+dz/n,e.r))e.z+=dz/n}}
 function segmentWall(ax,az,bx,bz){const len=Math.hypot(bx-ax,bz-az),steps=Math.max(1,Math.ceil(len/.2));for(let i=1;i<=steps;i++)if(blocked(ax+(bx-ax)*i/steps,az+(bz-az)*i/steps,.07))return true;return false}
+const navLayers=new Map();
 const N=120,walk=new Uint8Array(N*N),flow=new Int16Array(N*N),queue=new Int16Array(N*N);for(let z=0;z<N;z++)for(let x=0;x<N;x++)walk[z*N+x]=blocked(x-HALF+.5,z-HALF+.5,.65)?0:1;
 function cell(x,z){return clamp(Math.floor(z+HALF),0,N-1)*N+clamp(Math.floor(x+HALF),0,N-1)}
 function flowField(p){let start=cell(p.x,p.z);if(!walk[start]){let best=Infinity;for(let i=0;i<walk.length;i++)if(walk[i]){const d=(i%N-HALF+.5-p.x)**2+(Math.floor(i/N)-HALF+.5-p.z)**2;if(d<best){best=d;start=i}}}if(lastFlowCell===start)return;lastFlowCell=start;flow.fill(-1);let head=0,tail=1;queue[0]=start;flow[start]=0;function visit(j,cost){if(walk[j]&&flow[j]<0){flow[j]=cost;queue[tail++]=j}}while(head<tail){const i=queue[head++],x=i%N,z=(i/N)|0,cost=flow[i]+1;if(x)visit(i-1,cost);if(x<N-1)visit(i+1,cost);if(z)visit(i-N,cost);if(z<N-1)visit(i+N,cost)}}
-function steer(e,p){if(distance(e,p)<3&&!segmentWall(e.x,e.z,p.x,p.z))return[p.x-e.x,p.z-e.z];const i=cell(e.x,e.z),x=i%N,z=Math.floor(i/N);let best=flow[i],target=i;for(const[a,b]of[[x-1,z],[x+1,z],[x,z-1],[x,z+1]]){if(a<0||a>=N||b<0||b>=N)continue;const j=b*N+a;if(flow[j]>=0&&(best<0||flow[j]<best)){best=flow[j];target=j}}return[target%N-HALF+.5-e.x,Math.floor(target/N)-HALF+.5-e.z]}
+// Large monsters need routes wide enough for their own collision body.
+function navigationFor(r,p){
+ if(r<=.7)return flow;const key=Math.round(r*1000);let layer=navLayers.get(key);
+ if(!layer){const cells=new Uint8Array(N*N);for(let i=0;i<cells.length;i++)cells[i]=blocked(i%N-HALF+.5,Math.floor(i/N)-HALF+.5,r)?0:1;layer={walk:cells,flow:new Int16Array(N*N),goal:-1};navLayers.set(key,layer)}
+ const goal=cell(p.x,p.z);if(layer.goal===goal)return layer.flow;layer.goal=goal;
+ let start=goal;if(!layer.walk[start]){let best=Infinity;for(let i=0;i<layer.walk.length;i++)if(layer.walk[i]){const d=(i%N-HALF+.5-p.x)**2+(Math.floor(i/N)-HALF+.5-p.z)**2;if(d<best){best=d;start=i}}}
+ const field=layer.flow;field.fill(-1);let head=0,tail=1;queue[0]=start;field[start]=0;
+ function visit(j,cost){if(layer.walk[j]&&field[j]<0){field[j]=cost;queue[tail++]=j}}
+ while(head<tail){const i=queue[head++],x=i%N,z=(i/N)|0,cost=field[i]+1;if(x)visit(i-1,cost);if(x<N-1)visit(i+1,cost);if(z)visit(i-N,cost);if(z<N-1)visit(i+N,cost)}return field;
+}
+// Swept circle clearance, rather than the projectile's almost point-sized ray.
+function pathClear(ax,az,bx,bz,r=.4){
+ if(blocked(ax,az,r)||blocked(bx,bz,r))return false;
+ const dx=bx-ax,dz=bz-az;
+ for(const o of obstacles){let lo=0,hi=1;
+  const x0=o.x-o.w/2-r,x1=o.x+o.w/2+r,z0=o.z-o.d/2-r,z1=o.z+o.d/2+r;
+  if(Math.abs(dx)<1e-9){if(ax<=x0||ax>=x1)continue}
+  else{let t0=(x0-ax)/dx,t1=(x1-ax)/dx;if(t0>t1){const tmp=t0;t0=t1;t1=tmp}lo=Math.max(lo,t0);hi=Math.min(hi,t1);if(lo>=hi)continue}
+  if(Math.abs(dz)<1e-9){if(az<=z0||az>=z1)continue}
+  else{let t0=(z0-az)/dz,t1=(z1-az)/dz;if(t0>t1){const tmp=t0;t0=t1;t1=tmp}lo=Math.max(lo,t0);hi=Math.min(hi,t1)}
+  if(lo<hi)return false;
+ }
+ return true;
+}
+function steer(e,p){
+ // On an open bridge, chase diagonally immediately instead of forming grid rows.
+ if(pathClear(e.x,e.z,p.x,p.z,e.r))return[p.x-e.x,p.z-e.z];
+ const field=navigationFor(e.r,p),i=cell(e.x,e.z),x=i%N,z=Math.floor(i/N);let best=Infinity,target=-1;
+ for(let dz=-1;dz<=1;dz++)for(let dx=-1;dx<=1;dx++){
+  if(!dx&&!dz)continue;const a=x+dx,b=z+dz;if(a<0||a>=N||b<0||b>=N)continue;
+  const j=b*N+a,tx=a-HALF+.5,tz=b-HALF+.5;
+  if(field[j]<0||(field[i]>=0&&field[j]>=field[i])||!pathClear(e.x,e.z,tx,tz,e.r))continue;
+  const score=field[j]+Math.hypot(tx-e.x,tz-e.z)+Math.hypot(tx-p.x,tz-p.z)*.001;
+  if(score<best){best=score;target=j}
+ }
+ if(target<0&&field[i]>=0&&pathClear(e.x,e.z,x-HALF+.5,z-HALF+.5,e.r))target=i;
+ return target<0?[0,0]:[target%N-HALF+.5-e.x,Math.floor(target/N)-HALF+.5-e.z];
+}
+function crowdMotion(e){let x=0,z=0;for(const o of nearbyEnemies(e.x,e.z,e.r+1.9)){
+ if(o===e)continue;const dx=e.x-o.x,dz=e.z-o.z,d=Math.hypot(dx,dz),reach=e.r+o.r+.35;
+ if(d>=reach||d<.001)continue;const force=(reach-d)/reach;x+=dx/d*force;z+=dz/d*force;
+ }const len=Math.hypot(x,z);return len>.8?[x/len*.8,z/len*.8]:[x,z];
+}
+function rangedDistance(e){return e.standOff??(e.standOff=6+((Math.sin(e.walk*17.13+e.type)*43758.5453)%1+1)%1*4)}
+
 function crystal(b,x,y,z,r,h,col){b.cone(x,y,z,r,h,col,5,.1,1);b.cone(x,y,z,r,-h*.3,col,5,0,1)}
 chooseMap(0);
 const models={};
@@ -184,7 +229,10 @@ let lastHUD=-1;function hud(force=false){if(!force&&mode==='playing'&&clock-last
 function update(dt){indexEnemies();explosionsLeft=12;updateKit(dt);t+=dt;totalTime+=dt;autosaveClock+=dt;profileClock+=dt;eliteClock+=dt;updateChallenge(dt);muzzle=Math.max(0,muzzle-dt);p.inv=Math.max(0,p.inv-dt);p.hp=Math.min(p.max,p.hp+regen*dt*(hasSynergy('fortress')?1.5:1));dashCD=Math.max(0,dashCD-dt);novaCD=Math.max(0,novaCD-dt);navTimer-=dt;if(navTimer<=0){flowField(p);navTimer=.45}let dx=Number(!!(keys.d||keys.arrowright))-Number(!!(keys.a||keys.arrowleft)),dz=Number(!!(keys.s||keys.arrowdown))-Number(!!(keys.w||keys.arrowup));const len=Math.hypot(dx,dz);if(len){dx/=len;dz/=len;p.dx=dx;p.dz=dz;move(p,dx*p.speed*dt,dz*p.speed*dt);p.angle=Math.atan2(dx,dz);p.walk+=dt*12}else p.walk+=dt*1.4;
 spawnTimer-=dt;if(spawnTimer<=0){const cap=difficulty?145:110;for(let i=0;i<(1+Math.floor(t/65))*(difficulty?1.3:1);i++)if(enemies.length<cap)spawnEnemy();spawnTimer=Math.max(.2,1-t*.002)*difficulties[difficulty].spawn/balance.density}for(const [at,type]of [[80,8],[155,9],[225,10]])if(t>=at&&!epicSpawns.includes(type)){if(spawnEnemy(false,type)){epicSpawns.push(type);epicAppeared=true;toast(epicName(enemies[enemies.length-1])+' VSTUPUJE DO ARÉNY')}}if(t>=270&&!bossAppeared){bossAppeared=spawnEnemy(true);if(bossAppeared){toast(activeMap.boss);beep(140)}}
 shotTimer-=dt;if(shotTimer<=0&&basicAttack())shotTimer=interval;
-for(let i=0;i<enemies.length;i++){const e=enemies[i];if(e.hp<=0)continue;let [a,b]=steer(e,p);const d=Math.hypot(a,b)||1;a/=d;b/=d;for(let j=Math.max(0,i-7);j<i;j++){const o=enemies[j],dd=distance(e,o);if(dd<e.r+o.r&&dd>.01){a+=(e.x-o.x)/dd*.7;b+=(e.z-o.z)/dd*.7}}const length=Math.hypot(a,b)||1;const stationary=defs[e.type].ranged&&distance(e,p)<9&&!segmentWall(e.x,e.z,p.x,p.z);if(!stationary)move(e,a/length*e.speed*dt*(e.chillTime>0?1-e.chill:1),b/length*e.speed*dt*(e.chillTime>0?1-e.chill:1));e.angle=Math.atan2(a,b);e.walk+=dt*e.speed*4;e.flash=Math.max(0,e.flash-dt);if(distance(e,p)<e.r+p.r+.1)takeDamage((e.type===3?32:e.type===2?18:11)*(e.elite?1.45:1),e);if(e.elite){e.eliteCD-=dt;if(e.eliteCD<=0){e.eliteCD=5.5;eliteAttack(e)}}e.cool-=dt;if(e.type>=8&&e.cool<=0){e.cool=e.type===10?5:6.5;if(e.type===10){const a=Math.atan2(p.x-e.x,p.z-e.z);for(let i=-1;i<=1;i++)hostile.push({x:e.x,z:e.z,vx:Math.sin(a+i*.3)*8,vz:Math.cos(a+i*.3)*8,life:3,damage:18,cannon:false})}else hazards.push({x:p.x,z:p.z,r:e.type===9?3.2:2.6,life:1.3,type:'elite',done:false})}if(defs[e.type].ranged&&e.cool<0&&distance(e,p)<14&&!segmentWall(e.x,e.z,p.x,p.z)){e.cool=e.type===5?2.8:2.2;const aim=Math.atan2(p.x-e.x,p.z-e.z);hostile.push({x:e.x,z:e.z,vx:Math.sin(aim)*7*(difficulty?1.18:1),vz:Math.cos(aim)*7*(difficulty?1.18:1),life:3,damage:e.type===5?22:12,cannon:e.type===5})}if(e.type===3&&e.cool<0){e.cool=5;hazards.push({x:p.x,z:p.z,r:3.8,life:1.15,type:'slam',done:false});toast('POZOR · DRTIVÝ ÚDER')}for(let k=0;k<orbit;k++){const angle=t*2.8+k*TWO/orbit;if(Math.hypot(e.x-p.x-Math.sin(angle)*orbitRadius(),e.z-p.z-Math.cos(angle)*orbitRadius())<e.r+.35)impact(e,damage*2*dt*(hasSynergy('mill')?1.3:1),true)}}
+for(let i=0;i<enemies.length;i++){const e=enemies[i];if(e.hp<=0)continue;let [a,b]=steer(e,p);const d=Math.hypot(a,b)||1;a/=d;b/=d;
+const stationary=defs[e.type].ranged&&distance(e,p)<rangedDistance(e)&&pathClear(e.x,e.z,p.x,p.z,e.r);
+const [sx,sz]=crowdMotion(e);a=(stationary?0:a)+sx;b=(stationary?0:b)+sz;
+const length=Math.max(1,Math.hypot(a,b));move(e,a/length*e.speed*dt*(e.chillTime>0?1-e.chill:1),b/length*e.speed*dt*(e.chillTime>0?1-e.chill:1));e.angle=Math.atan2(a,b);e.walk+=dt*e.speed*4;e.flash=Math.max(0,e.flash-dt);if(distance(e,p)<e.r+p.r+.1)takeDamage((e.type===3?32:e.type===2?18:11)*(e.elite?1.45:1),e);if(e.elite){e.eliteCD-=dt;if(e.eliteCD<=0){e.eliteCD=5.5;eliteAttack(e)}}e.cool-=dt;if(e.type>=8&&e.cool<=0){e.cool=e.type===10?5:6.5;if(e.type===10){const a=Math.atan2(p.x-e.x,p.z-e.z);for(let i=-1;i<=1;i++)hostile.push({x:e.x,z:e.z,vx:Math.sin(a+i*.3)*8,vz:Math.cos(a+i*.3)*8,life:3,damage:18,cannon:false})}else hazards.push({x:p.x,z:p.z,r:e.type===9?3.2:2.6,life:1.3,type:'elite',done:false})}if(defs[e.type].ranged&&e.cool<0&&distance(e,p)<14&&!segmentWall(e.x,e.z,p.x,p.z)){e.cool=e.type===5?2.8:2.2;const aim=Math.atan2(p.x-e.x,p.z-e.z);hostile.push({x:e.x,z:e.z,vx:Math.sin(aim)*7*(difficulty?1.18:1),vz:Math.cos(aim)*7*(difficulty?1.18:1),life:3,damage:e.type===5?22:12,cannon:e.type===5})}if(e.type===3&&e.cool<0){e.cool=5;hazards.push({x:p.x,z:p.z,r:3.8,life:1.15,type:'slam',done:false});toast('POZOR · DRTIVÝ ÚDER')}for(let k=0;k<orbit;k++){const angle=t*2.8+k*TWO/orbit;if(Math.hypot(e.x-p.x-Math.sin(angle)*orbitRadius(),e.z-p.z-Math.cos(angle)*orbitRadius())<e.r+.35)impact(e,damage*2*dt*(hasSynergy('mill')?1.3:1),true)}}
 indexEnemies();for(const s of shots){const nx=s.x+s.vx*dt,nz=s.z+s.vz*dt;s.life-=dt;if(segmentWall(s.x,s.z,nx,nz))s.life=0;else{for(const e of nearbyEnemies(s.x,s.z,3)){if(e.hp<=0||s.struck.includes(e))continue;const vx=nx-s.x,vz=nz-s.z,dd=vx*vx+vz*vz,u=dd?clamp(((e.x-s.x)*vx+(e.z-s.z)*vz)/dd,0,1):0;if(Math.hypot(e.x-(s.x+vx*u),e.z-(s.z+vz*u))<e.r+.16){impact(e,s.damage??damage);if(s.blast){combatFX.push({type:'explosion',x:e.x,z:e.z,r:s.blast,life:.25,color:[.65,.4,1]});for(const other of enemies)if(other!==e&&other.hp>0&&distance(other,e)<s.blast&&!segmentWall(e.x,e.z,other.x,other.z))impact(other,(s.damage??damage)*.65,true)}s.struck.push(e);s.pierce--;if(s.pierce<=0){s.life=0;break}}}}s.x=nx;s.z=nz}shots=shots.filter(s=>s.life>0);enemies=enemies.filter(e=>e.hp>0);
 for(const shot of hostile){const x=shot.x+shot.vx*dt,z=shot.z+shot.vz*dt;shot.life-=dt;if(segmentWall(shot.x,shot.z,x,z))shot.life=0;shot.x=x;shot.z=z;if(distance(shot,p)<p.r+.23){takeDamage(shot.damage);shot.life=0}}hostile=hostile.filter(s=>s.life>0);
 for(const gem of gems){const d=distance(gem,p);if(d<magnet){const nx=gem.x+(p.x-gem.x)*Math.min(1,dt*8),nz=gem.z+(p.z-gem.z)*Math.min(1,dt*8);if(!segmentWall(gem.x,gem.z,nx,nz)){gem.x=nx;gem.z=nz}}if(d<.65){if(gem.heal)p.hp=Math.min(p.max,p.hp+28);else xp+=gem.value*(1+build.xpBonus);gem.used=true}}gems=gems.filter(x=>!x.used);if(clock-lastGemCompact>2){lastGemCompact=clock;compactGems()}updateRewards(dt);
